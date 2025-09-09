@@ -5,11 +5,11 @@ on:
     # 凌晨任务：北京时间每天 01:00（UTC 前一天 17:00）
     - cron: '0 17 * * *'
     # 早间任务：北京时间每天 05:00（UTC 前一天 21:00）
-    #- cron: '0 21 * * *'
+    - cron: '0 21 * * *'
     # 午间任务：北京时间每天 11:40（UTC 03:40）
-    #- cron: '40 3 * * *'
+    - cron: '40 3 * * *'
     # 晚间任务：北京时间每天 22:00（UTC 14:00）
-    #- cron: '0 14 * * *'
+    - cron: '0 14 * * *'
   workflow_dispatch:  # 手动触发
 
 jobs:
@@ -19,25 +19,63 @@ jobs:
 
     steps:
 
+    - name: Random execution decision
+      id: should_run
+      run: |
+        # 50% 概率跳过执行（如果是定时触发）
+        if [ "${{ github.event_name }}" = "schedule" ]; then
+          SKIP_CHANCE=$((RANDOM % 2))
+          if [ $SKIP_CHANCE -eq 0 ]; then
+            echo "🎲 随机跳过此次执行"
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        fi
+        echo "should_run=true" >> $GITHUB_OUTPUT
+        echo "✅ 继续执行任务"
+
+    - name: Random delay to avoid peak time
+      if: steps.should_run.outputs.should_run == 'true'
+      run: |
+        # 生成0到30分钟的随机延迟（1800秒）
+        DELAY=$((RANDOM % 1801))
+        echo "⏰ 随机延迟时间: $DELAY 秒 ($(($DELAY / 60)) 分 $(($DELAY % 60)) 秒)"
+        echo "🕐 预计开始时间: $(date -d "+$DELAY seconds" "+%Y-%m-%d %H:%M:%S")"
+        sleep $DELAY
+
     - name: Set DNS to Google's DNS
+      if: steps.should_run.outputs.should_run == 'true'
       run: |
         echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
         echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
 
     - name: Checkout repository
+      if: steps.should_run.outputs.should_run == 'true'
       uses: actions/checkout@v2
 
     - name: Set up Python
+      if: steps.should_run.outputs.should_run == 'true'
       uses: actions/setup-python@v2
       with:
         python-version: '3.10'
 
     - name: Install dependencies
+      if: steps.should_run.outputs.should_run == 'true'
       run: |
         python -m pip install --upgrade pip
         pip install certifi==2024.8.30 charset-normalizer==3.4.0 idna==3.10 requests==2.32.3 urllib3==2.2.3
 
+    - name: Generate random READ_NUM
+      if: steps.should_run.outputs.should_run == 'true'
+      id: random
+      run: |
+        # 生成200到300之间的随机数
+        READ_NUM=$((200 + RANDOM % 101))
+        echo "Generated READ_NUM: $READ_NUM"
+        echo "READ_NUM=$READ_NUM" >> $GITHUB_OUTPUT
+
     - name: Run deployment script
+      if: steps.should_run.outputs.should_run == 'true'
       env:
         WXREAD_CURL_BASH: ${{ secrets.WXREAD_CURL_BASH }}
         PUSH_METHOD: ${{ secrets.PUSH_METHOD }}
@@ -45,7 +83,7 @@ jobs:
         WXPUSHER_SPT: ${{ secrets.WXPUSHER_SPT }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        READ_NUM: ${{ vars.READ_NUM }}  # 使用 Repository Variables
+        READ_NUM: ${{ steps.random.outputs.READ_NUM }}  # 使用动态生成的随机数（200-300）
 
       run: |
         python main.py
