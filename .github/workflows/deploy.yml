@@ -2,14 +2,8 @@ name: wxread
 
 on:
   schedule:
-    # 凌晨任务：北京时间每天 01:00（UTC 前一天 17:00）
-    - cron: '0 17 * * *'
-    # 早间任务：北京时间每天 05:00（UTC 前一天 21:00）
-    - cron: '0 21 * * *'
-    # 午间任务：北京时间每天 11:40（UTC 03:40）
-    - cron: '40 3 * * *'
-    # 晚间任务：北京时间每天 22:00（UTC 14:00）
-    - cron: '0 14 * * *'
+    # 每2小时触发一次，一天12个随机触发点，通过智能算法控制实际执行
+    - cron: '0 0,2,4,6,8,10,12,14,16,18,20,22 * * *'
   workflow_dispatch:  # 手动触发
 
 jobs:
@@ -19,29 +13,105 @@ jobs:
 
     steps:
 
-    - name: Random execution decision
+    - name: Smart execution decision
       id: should_run
       run: |
-        # 50% 概率跳过执行（如果是定时触发）
-        if [ "${{ github.event_name }}" = "schedule" ]; then
-          SKIP_CHANCE=$((RANDOM % 2))
-          if [ $SKIP_CHANCE -eq 0 ]; then
-            echo "🎲 随机跳过此次执行"
-            echo "should_run=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+        echo "🎯 开始智能执行决策..."
+        
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "🚀 手动触发，直接执行"
+          echo "should_run=true" >> $GITHUB_OUTPUT
+          echo "execution_reason=manual" >> $GITHUB_OUTPUT
+          exit 0
         fi
-        echo "should_run=true" >> $GITHUB_OUTPUT
-        echo "✅ 继续执行任务"
+        
+        # 获取当前小时和日期
+        CURRENT_HOUR=$(date -u +%H)
+        TODAY=$(date -u +%Y-%m-%d)
+        echo "📅 当前UTC时间: $(date -u '+%Y-%m-%d %H:%M:%S')"
+        echo "🕐 当前小时: $CURRENT_HOUR"
+        
+        # 基于时间和随机种子生成执行概率
+        # 每天目标执行3-5次，12个触发点，所以基础概率约30-40%
+        HOUR_SEED=$(($(date +%s) % 100))
+        DAY_SEED=$(($(echo $TODAY | tr -d -) % 100))
+        COMBINED_SEED=$(((HOUR_SEED + DAY_SEED + CURRENT_HOUR) % 100))
+        
+        # 动态概率：早晚时段概率稍高，避开高峰时段
+        BASE_PROB=35
+        if [ $CURRENT_HOUR -ge 1 ] && [ $CURRENT_HOUR -le 6 ]; then
+          # 凌晨时段，概率稍高
+          EXEC_PROB=$((BASE_PROB + 5))
+        elif [ $CURRENT_HOUR -ge 7 ] && [ $CURRENT_HOUR -le 9 ]; then
+          # 早高峰，概率降低
+          EXEC_PROB=$((BASE_PROB - 10))
+        elif [ $CURRENT_HOUR -ge 18 ] && [ $CURRENT_HOUR -le 20 ]; then
+          # 晚高峰，概率降低
+          EXEC_PROB=$((BASE_PROB - 10))
+        elif [ $CURRENT_HOUR -ge 22 ] || [ $CURRENT_HOUR -eq 0 ]; then
+          # 深夜时段，概率稍高
+          EXEC_PROB=$((BASE_PROB + 8))
+        else
+          EXEC_PROB=$BASE_PROB
+        fi
+        
+        # 添加随机扰动
+        RANDOM_ADJUST=$(((COMBINED_SEED % 21) - 10))  # -10到+10的随机调整
+        FINAL_PROB=$((EXEC_PROB + RANDOM_ADJUST))
+        
+        # 确保概率在合理范围内
+        if [ $FINAL_PROB -lt 15 ]; then FINAL_PROB=15; fi
+        if [ $FINAL_PROB -gt 50 ]; then FINAL_PROB=50; fi
+        
+        echo "📊 执行概率计算: 基础${BASE_PROB}% + 时段调整 + 随机扰动 = ${FINAL_PROB}%"
+        
+        # 执行概率判断
+        DICE_ROLL=$((COMBINED_SEED % 100))
+        echo "🎲 随机数: $DICE_ROLL (需要 < $FINAL_PROB 才执行)"
+        
+        if [ $DICE_ROLL -lt $FINAL_PROB ]; then
+          echo "✅ 概率判断通过，准备执行任务"
+          echo "should_run=true" >> $GITHUB_OUTPUT
+          echo "execution_reason=scheduled" >> $GITHUB_OUTPUT
+        else
+          echo "⏭️  概率判断未通过，跳过此次执行"
+          echo "should_run=false" >> $GITHUB_OUTPUT
+          exit 0
+        fi
 
-    - name: Random delay to avoid peak time
+    - name: Extended random delay for better distribution
       if: steps.should_run.outputs.should_run == 'true'
       run: |
-        # 生成0到30分钟的随机延迟（1800秒）
-        DELAY=$((RANDOM % 1801))
-        echo "⏰ 随机延迟时间: $DELAY 秒 ($(($DELAY / 60)) 分 $(($DELAY % 60)) 秒)"
-        echo "🕐 预计开始时间: $(date -d "+$DELAY seconds" "+%Y-%m-%d %H:%M:%S")"
-        sleep $DELAY
+        # 生成30到60分钟的随机延迟（1800-3600秒）
+        MIN_DELAY=1800  # 30分钟
+        MAX_DELAY=3600  # 60分钟
+        DELAY_RANGE=$((MAX_DELAY - MIN_DELAY))
+        DELAY=$((MIN_DELAY + RANDOM % DELAY_RANGE))
+        
+        DELAY_MINUTES=$(($DELAY / 60))
+        DELAY_SECONDS=$(($DELAY % 60))
+        
+        echo "⏰ 随机延迟时间: $DELAY 秒 (${DELAY_MINUTES}分${DELAY_SECONDS}秒)"
+        echo "🕐 当前时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        echo "🚀 预计开始时间: $(date -u -d "+$DELAY seconds" '+%Y-%m-%d %H:%M:%S UTC')"
+        echo "📝 延迟原因: 分散执行时间，避免请求集中"
+        
+        # 分阶段显示倒计时（每5分钟显示一次进度）
+        REMAINING=$DELAY
+        while [ $REMAINING -gt 300 ]; do
+          sleep 300  # 5分钟
+          REMAINING=$((REMAINING - 300))
+          REMAINING_MIN=$((REMAINING / 60))
+          echo "⏳ 还需等待 ${REMAINING_MIN} 分钟..."
+        done
+        
+        # 最后阶段直接等待
+        if [ $REMAINING -gt 0 ]; then
+          echo "⏳ 最后等待 $((REMAINING / 60)) 分钟..."
+          sleep $REMAINING
+        fi
+        
+        echo "✅ 延迟结束，开始执行任务"
 
     - name: Set DNS to Google's DNS
       if: steps.should_run.outputs.should_run == 'true'
