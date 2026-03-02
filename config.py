@@ -1,6 +1,7 @@
 # config.py 自定义配置,包括阅读次数、推送token的填写
 import os
 import re
+import shlex
 
 """
 可修改区域
@@ -85,31 +86,77 @@ def convert(curl_command):
     """提取bash接口中的headers与cookies
     支持 -H 'Cookie: xxx' 和 -b 'xxx' 两种方式的cookie提取
     """
-    # 提取 headers
+    normalized_command = (
+        curl_command
+        .replace("\\\r\n", " ")
+        .replace("\\\n", " ")
+        .replace("\r\n", " ")
+        .replace("\n", " ")
+    )
+
+    try:
+        parts = shlex.split(normalized_command, posix=True)
+    except ValueError:
+        parts = []
+
     headers_temp = {}
-    for match in re.findall(r"-H '([^:]+): ([^']+)'", curl_command):
-        headers_temp[match[0]] = match[1]
+    cookie_string = ""
+
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        value = None
+
+        if part in ("-H", "--header") and index + 1 < len(parts):
+            value = parts[index + 1]
+            index += 2
+        elif part.startswith("--header="):
+            value = part.split("=", 1)[1]
+            index += 1
+        elif part in ("-b", "--cookie") and index + 1 < len(parts):
+            cookie_string = parts[index + 1]
+            index += 2
+            continue
+        elif part.startswith("--cookie="):
+            cookie_string = part.split("=", 1)[1]
+            index += 1
+            continue
+        else:
+            index += 1
+            continue
+
+        if value and ":" in value:
+            key, header_value = value.split(":", 1)
+            headers_temp[key.strip()] = header_value.strip()
+
+    if not headers_temp:
+        for match in re.findall(r"-H\s+['\"]([^:]+):\s*(.*?)['\"](?=\s+-|$)", normalized_command):
+            headers_temp[match[0].strip()] = match[1].strip()
+
+    if not cookie_string:
+        cookie_match = re.search(r"(?:-b|--cookie)\s+['\"](.*?)['\"](?=\s+-|$)", normalized_command)
+        if cookie_match:
+            cookie_string = cookie_match.group(1).strip()
 
     # 提取 cookies
     cookies = {}
-    
+
     # 从 -H 'Cookie: xxx' 提取
-    cookie_header = next((v for k, v in headers_temp.items() 
+    cookie_header = next((v for k, v in headers_temp.items()
                          if k.lower() == 'cookie'), '')
-    
+
     # 从 -b 'xxx' 提取
-    cookie_b = re.search(r"-b '([^']+)'", curl_command)
-    cookie_string = cookie_b.group(1) if cookie_b else cookie_header
-    
+    cookie_string = cookie_string or cookie_header
+
     # 解析 cookie 字符串
     if cookie_string:
-        for cookie in cookie_string.split('; '):
+        for cookie in cookie_string.split(';'):
             if '=' in cookie:
                 key, value = cookie.split('=', 1)
                 cookies[key.strip()] = value.strip()
-    
+
     # 移除 headers 中的 Cookie/cookie
-    headers = {k: v for k, v in headers_temp.items() 
+    headers = {k: v for k, v in headers_temp.items()
               if k.lower() != 'cookie'}
 
     return headers, cookies

@@ -7,6 +7,7 @@ import logging
 import hashlib
 import requests
 import urllib.parse
+from http.cookies import SimpleCookie
 from push import push
 from config import data, headers, cookies, READ_NUM, PUSH_METHOD, book, chapter
 
@@ -43,31 +44,49 @@ def cal_hash(input_string):
 
 def get_wr_skey():
     """刷新cookie密钥"""
-    response = requests.post(RENEW_URL, headers=headers, cookies=cookies,
-                             data=json.dumps(COOKIE_DATA, separators=(',', ':')))
-    for cookie in response.headers.get('Set-Cookie', '').split(';'):
-        if "wr_skey" in cookie:
-            return cookie.split('=')[-1][:8]
-    return None
+    response = requests.post(
+        RENEW_URL,
+        headers=headers,
+        cookies=cookies,
+        data=json.dumps(COOKIE_DATA, separators=(',', ':')),
+        timeout=20,
+    )
+
+    refreshed_cookies = response.cookies.get_dict()
+    if refreshed_cookies.get('wr_skey'):
+        return refreshed_cookies
+
+    set_cookie = response.headers.get('Set-Cookie', '')
+    if set_cookie:
+        parsed_cookies = SimpleCookie()
+        parsed_cookies.load(set_cookie)
+        for key, morsel in parsed_cookies.items():
+            refreshed_cookies[key] = morsel.value
+
+    return refreshed_cookies
 
 def fix_no_synckey():
     requests.post(FIX_SYNCKEY_URL, headers=headers, cookies=cookies,
                              data=json.dumps({"bookIds":["3300060341"]}, separators=(',', ':')))
 
-def refresh_cookie():
+def refresh_cookie(strict=True):
     logging.info(f"🍪 刷新cookie")
-    new_skey = get_wr_skey()
+    refreshed_cookies = get_wr_skey()
+    new_skey = refreshed_cookies.get('wr_skey')
     if new_skey:
-        cookies['wr_skey'] = new_skey
+        cookies.update(refreshed_cookies)
         logging.info(f"✅ 密钥刷新成功，新密钥：{new_skey}")
         logging.info(f"🔄 重新本次阅读。")
     else:
         ERROR_CODE = "❌ 无法获取新密钥或者WXREAD_CURL_BASH配置有误，终止运行。"
-        logging.error(ERROR_CODE)
-        push(ERROR_CODE, PUSH_METHOD)
-        raise Exception(ERROR_CODE)
+        if strict:
+            logging.error(ERROR_CODE)
+            if PUSH_METHOD not in (None, ''):
+                push(ERROR_CODE, PUSH_METHOD)
+            raise Exception(ERROR_CODE)
+        logging.warning("⚠️ 密钥刷新失败，先使用当前 cookie 继续尝试阅读。")
 
-refresh_cookie()
+refresh_cookie(strict=False)
 index = 1
 lastTime = int(time.time()) - 30
 logging.info(f"⏱️ 一共需要阅读 {READ_NUM} 次...")

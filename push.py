@@ -127,6 +127,10 @@ def push(content, method):
     """统一推送接口，支持 PushPlus、Telegram 和 WxPusher"""
     notifier = PushNotification()
 
+    if method in (None, ''):
+        logger.info("ℹ️ 未配置推送渠道，跳过推送")
+        return None
+
     if method == "pushplus":
         token = PUSHPLUS_TOKEN
         return notifier.push_pushplus(content, token)
@@ -139,4 +143,4 @@ def push(content, method):
     elif method == "serverchan":
         return notifier.push_serverChan(content, SERVERCHAN_SPT)
     else:
-        raise ValueError("❌ 无效的通知渠道，请选择 'pushplus'、'telegram' 或 'wxpusher'")
+        raise ValueError("❌ 无效的通知渠道，请选择 'pushplus'、'telegram'、'wxpusher' 或 'serverchan'")
